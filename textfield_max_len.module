@@ -1,0 +1,74 @@
+<?php
+/**
+* @file
+* Provides ability to modify maximum length of a text field.
+*/
+
+
+/**
+ * Implements hook_form_FORM_ID_alter().
+ */
+function textfield_max_len_form_field_ui_field_edit_form_alter(&$form, &$form_state, $form_id) {
+  if ($form['instance']['widget']['type']['#value'] == 'text_textfield') {
+    $form['field']['settings']['max_length']['#disabled'] = FALSE;
+    array_unshift($form['#submit'], 'textfield_max_len_form_field_ui_field_edit_form_submit');
+    $form_state['storage']['max_length_old'] = $form['#field']['settings']['max_length'];
+  }
+}
+
+/**
+ * Form submit callback
+ */
+function textfield_max_len_form_field_ui_field_edit_form_submit($form, &$form_state) {
+  $max_len_old = $form_state['storage']['max_length_old'];
+  $max_len_new = $form_state['values']['field']['settings']['max_length'];
+
+  if ($max_len_old !== $max_len_new) {
+    $field_name = $form['#field']['field_name'];
+    $field_data_table = 'field_data_' . $field_name;
+    $field_revision_table = 'field_revision_' . $field_name;
+    $field_column = $field_name . '_value';
+
+    $transaction = db_transaction();
+    try {
+      _textfield_max_len_resize_db_column($field_data_table, $field_column, $max_len_new);
+      _textfield_max_len_resize_db_column($field_revision_table, $field_column, $max_len_new);
+      _textfield_max_len_resize_field_config($field_name, $max_len_new);
+    } catch(Exception $e) {
+      $transaction->rollback();
+      watchdog_exception('textfield_max_len', $e);
+    }
+
+    field_cache_clear(TRUE);
+  }
+}
+
+/**
+ * Resizes column and truncates data within it (if necessary).
+ */
+function _textfield_max_len_resize_db_column($table, $column, $length, $type = 'varchar') {
+  db_update($table)
+    ->expression($column, "SUBSTRING($column, 1, :length)", array(':length' => $length))
+    ->execute();
+
+  db_change_field($table, $column, $column, array('type' => $type, 'length' => $length));
+}
+
+/**
+ * Updates maximum length setting in serialized field configuration.
+ */
+function _textfield_max_len_resize_field_config($field_name, $length) {
+  $config = db_query(
+    'SELECT CAST(data AS CHAR(10000) CHARACTER SET utf8) FROM field_config WHERE field_name = :field_name',
+    array(':field_name' => $field_name)
+  )->fetchField();
+
+  $config = unserialize($config);
+  $config['settings']['max_length'] = $length;
+  $config = serialize($config);
+
+  db_update('field_config')
+    ->fields(array('data' => $config))
+    ->condition('field_name', $field_name)
+    ->execute();
+}

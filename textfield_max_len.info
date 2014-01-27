@@ -1,0 +1,3 @@
+name = Text Field Max Length
+description = Modify text field maximum length
+core = 7.x
